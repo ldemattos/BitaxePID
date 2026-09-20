@@ -64,6 +64,7 @@ usage: bitaxepid.py [-h] [--version] --ip IP [--config CONFIG] [--user-file USER
                     [--primary-stratum PRIMARY_STRATUM] [--backup-stratum BACKUP_STRATUM] [--stratum-user STRATUM_USER]
                     [--fallback-stratum-user FALLBACK_STRATUM_USER] [--voltage VOLTAGE] [--frequency FREQUENCY]
                     [--sample-interval SAMPLE_INTERVAL] [--log-to-console] [--logging-level {info,debug}] [--serve-metrics]
+                    [--disable-fastest-pools]
 
 BitaxePID Auto-Tuner
 
@@ -93,6 +94,11 @@ options:
   --logging-level {info,debug}
                         Logging level
   --serve-metrics       Serve metrics via HTTP on port 8093 (default: False)
+  --disable-fastest-pools
+                        Disable pool latency measurement via get_fastest_pools()
+                        (default: False). Requires PRIMARY_STRATUM/BACKUP_STRATUM
+                        to be set (via config or --primary-stratum/--backup-stratum),
+                        or the tuner exits at startup.
 
 ### Configuration Notes
 The script loads default settings from an ASIC model-specific YAML file (e.g., BM1366.yaml).

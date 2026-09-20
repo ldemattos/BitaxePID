@@ -129,6 +129,7 @@ class TuningManager:
         user_file: Optional[str] = None,
         primary_stratum: Optional[Dict[str, Any]] = None,
         backup_stratum: Optional[Dict[str, Any]] = None,
+        disable_fastest_pools: bool = False,
     ) -> None:
         """
         Initialize the TuningManager with tuning parameters and miner settings.
@@ -147,6 +148,10 @@ class TuningManager:
             user_file (Optional[str]): Path to user YAML file, if provided.
             primary_stratum (Optional[Dict[str, Any]]): Primary stratum settings.
             backup_stratum (Optional[Dict[str, Any]]): Backup stratum settings.
+            disable_fastest_pools (bool): If True, never call get_fastest_pools() to
+                latency-test pools from pools_file; PRIMARY_STRATUM/BACKUP_STRATUM
+                (via config or --primary-stratum/--backup-stratum) must be supplied
+                instead, or initialization will fail.
         """
         self.tuning_strategy = tuning_strategy
         self.api_client = api_client
@@ -160,6 +165,7 @@ class TuningManager:
         self.pools_file = pools_file
         self.config = config
         self.user_file = user_file
+        self.disable_fastest_pools = disable_fastest_pools
         logging.debug(f"User file set to: {self.user_file}")
 
         system_info = self.api_client.get_system_info()
@@ -191,6 +197,13 @@ class TuningManager:
             )
         elif "PRIMARY_STRATUM" in self.config and "BACKUP_STRATUM" in self.config:
             stratum_info = self._parse_config_stratums()
+        elif self.disable_fastest_pools:
+            logging.error(
+                "get_fastest_pools() is disabled (--disable-fastest-pools) and no "
+                "PRIMARY_STRATUM/BACKUP_STRATUM was provided via config or "
+                "--primary-stratum/--backup-stratum"
+            )
+            sys.exit(1)
         else:
             logging.debug(
                 f"Measuring pools from {self.pools_file}"
@@ -215,6 +228,12 @@ class TuningManager:
 
     def _get_backup_pool(self) -> Dict[str, Any]:
         """Fetch a backup pool via latency testing if not provided."""
+        if self.disable_fastest_pools:
+            logging.error(
+                "No --backup-stratum provided and get_fastest_pools() is disabled "
+                "(--disable-fastest-pools); cannot determine a backup pool"
+            )
+            sys.exit(1)
         logging.info("Measuring backup pool latencies...")
         backup_pools = get_fastest_pools(
             yaml_file=self.pools_file,
@@ -469,6 +488,15 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Serve metrics via HTTP on port 8093 (default: False)",
     )
+    parser.add_argument(
+        "--disable-fastest-pools",
+        action="store_true",
+        help=(
+            "Disable pool latency measurement via get_fastest_pools() (default: False). "
+            "Requires PRIMARY_STRATUM/BACKUP_STRATUM to be set (via config or "
+            "--primary-stratum/--backup-stratum), or the tuner will exit at startup."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -623,6 +651,7 @@ def main() -> None:
         user_file=args.user_file if args.user_file else config.get("USER_FILE", None),
         primary_stratum=primary_stratum,
         backup_stratum=backup_stratum,
+        disable_fastest_pools=args.disable_fastest_pools,
     )
 
     def signal_handler(sig: int, frame: Any) -> None:
