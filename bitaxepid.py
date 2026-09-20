@@ -601,6 +601,10 @@ def main() -> None:
         handlers=handlers,
     )
 
+    logging.debug("Command-line arguments:")
+    for key, value in sorted(vars(args).items()):
+        logging.debug(f"  --{key} = {value}")
+
     # Initialize the API client with enhanced settings
     api_client = BitaxeAPIClient(
         ip=args.ip,
@@ -631,6 +635,11 @@ def main() -> None:
 
     serve_metrics = args.serve_metrics or config.get("METRICS_SERVE", False)
     config["METRICS_SERVE"] = serve_metrics
+
+    logging.debug(f"ASIC model detected: {asic_model} (loaded from {asic_yaml})")
+    logging.debug("Effective configuration (ASIC model YAML + --config + CLI overrides):")
+    for key, value in sorted(config.items()):
+        logging.debug(f"  {key} = {value}")
 
     logger_instance = Logger(config["LOG_FILE"], config["SNAPSHOT_FILE"])
     tuning_strategy = PIDTuningStrategy(
@@ -663,6 +672,19 @@ def main() -> None:
     )
     if backup_stratum and args.fallback_stratum_user:
         backup_stratum["user"] = args.fallback_stratum_user
+
+    logging.debug("Resolved startup settings:")
+    logging.debug(f"  asic_model = {asic_model}")
+    logging.debug(f"  serve_metrics = {serve_metrics}")
+    logging.debug(f"  disable_fastest_pools = {args.disable_fastest_pools}")
+    logging.debug(f"  primary_stratum (from --primary-stratum) = {primary_stratum}")
+    logging.debug(f"  backup_stratum (from --backup-stratum) = {backup_stratum}")
+    logging.debug(
+        f"  pools_file = {args.pools_file if args.pools_file else config['POOLS_FILE']}"
+    )
+    logging.debug(
+        f"  user_file = {args.user_file if args.user_file else config.get('USER_FILE', None)}"
+    )
 
     tuning_manager = TuningManager(
         tuning_strategy=tuning_strategy,
