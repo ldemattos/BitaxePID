@@ -1,0 +1,64 @@
+# BitaxePID Auto-Tuner — Alpine (x86_64) container
+#
+# Quick start:
+#   1. cp docker/.env.example docker/.env   (or export vars in your shell)
+#   2. edit docker/.env: set BITAXE_IP at minimum
+#   3. docker compose -f docker/docker-compose.yml up -d --build
+#
+# All bitaxepid.py inputs are adjustable via environment variables — see
+# docker/.env.example for the full list and docker/entrypoint.sh for how
+# they are translated into CLI flags / a generated YAML config.
+
+services:
+  bitaxepid:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION:-3.20}
+        BITAXEPID_REPO: ${BITAXEPID_REPO:-https://github.com/ldemattos/BitaxePID.git}
+        BITAXEPID_REF: ${BITAXEPID_REF:-main}
+    image: bitaxepid:latest
+    container_name: bitaxepid
+    restart: unless-stopped
+
+    environment:
+      # --- required -----------------------------------------------------
+      BITAXE_IP: ${BITAXE_IP:?Set BITAXE_IP to your Bitaxe miner's IP address}
+
+      # --- pool / stratum overrides (optional; blank = use config/API) --
+      PRIMARY_STRATUM: ${PRIMARY_STRATUM:-}
+      BACKUP_STRATUM: ${BACKUP_STRATUM:-}
+      STRATUM_USER: ${STRATUM_USER:-}
+      FALLBACK_STRATUM_USER: ${FALLBACK_STRATUM_USER:-}
+      USER_FILE: ${USER_FILE:-}
+      POOLS_FILE: ${POOLS_FILE:-}
+
+      # --- tuning overrides (optional; blank = use <ASICModel>.yaml) ----
+      VOLTAGE: ${VOLTAGE:-}
+      FREQUENCY: ${FREQUENCY:-}
+      SAMPLE_INTERVAL: ${SAMPLE_INTERVAL:-}
+
+      # --- runtime behaviour ---------------------------------------------
+      LOGGING_LEVEL: ${LOGGING_LEVEL:-info}       # info | debug
+      LOG_TO_CONSOLE: ${LOG_TO_CONSOLE:-true}     # true = plain logs (default for containers); false = rich TUI (needs tty: true)
+      SERVE_METRICS: ${SERVE_METRICS:-false}      # true = expose Prometheus/Grafana metrics on :8093
+      DISABLE_FASTEST_POOLS: ${DISABLE_FASTEST_POOLS:-false}  # true = skip get_fastest_pools() latency testing (requires PRIMARY_STRATUM; BACKUP_STRATUM reused from PRIMARY_STRATUM if unset)
+
+      # --- fine-grained config overrides ---------------------------------
+      # Any key from BM1366.yaml/BM1368.yaml/etc. can be overridden with a
+      # BITAXEPID_CFG_<KEY> variable, e.g.:
+      #   BITAXEPID_CFG_TARGET_TEMP: "58.0"
+      #   BITAXEPID_CFG_HASHRATE_SETPOINT: "550"
+      #   BITAXEPID_CFG_POWER_LIMIT: "16.0"
+
+    ports:
+      - "${METRICS_PORT:-8093}:8093"
+
+    volumes:
+      - bitaxepid-data:/data
+
+    # tty: true   # uncomment together with LOG_TO_CONSOLE=false to use the rich TUI
+
+volumes:
+  bitaxepid-data:

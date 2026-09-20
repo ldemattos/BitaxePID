@@ -193,15 +193,20 @@ class TuningManager:
             stratum_info = (
                 [primary_stratum, backup_stratum]
                 if backup_stratum
-                else [primary_stratum, self._get_backup_pool()]
+                else [primary_stratum, self._get_backup_pool(primary_stratum)]
             )
         elif "PRIMARY_STRATUM" in self.config and "BACKUP_STRATUM" in self.config:
             stratum_info = self._parse_config_stratums()
+        elif "PRIMARY_STRATUM" in self.config:
+            primary_from_config = self._parse_primary_stratum_config()
+            stratum_info = [
+                primary_from_config,
+                self._get_backup_pool(primary_from_config),
+            ]
         elif self.disable_fastest_pools:
             logging.error(
                 "get_fastest_pools() is disabled (--disable-fastest-pools) and no "
-                "PRIMARY_STRATUM/BACKUP_STRATUM was provided via config or "
-                "--primary-stratum/--backup-stratum"
+                "PRIMARY_STRATUM was provided via config or --primary-stratum"
             )
             sys.exit(1)
         else:
@@ -226,11 +231,25 @@ class TuningManager:
         )
         self._initialize_hardware()
 
-    def _get_backup_pool(self) -> Dict[str, Any]:
-        """Fetch a backup pool via latency testing if not provided."""
+    def _get_backup_pool(
+        self, primary: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Fetch a backup pool via latency testing if not provided.
+
+        If get_fastest_pools() is disabled (--disable-fastest-pools) and a primary
+        pool is known, the primary pool is reused as the backup so the tuner can
+        keep running with a single working pool instead of exiting.
+        """
         if self.disable_fastest_pools:
+            if primary is not None:
+                logging.warning(
+                    "No --backup-stratum provided and get_fastest_pools() is "
+                    "disabled (--disable-fastest-pools); using the primary stratum "
+                    "as the backup pool as well"
+                )
+                return dict(primary)
             logging.error(
-                "No --backup-stratum provided and get_fastest_pools() is disabled "
+                "No backup stratum available and get_fastest_pools() is disabled "
                 "(--disable-fastest-pools); cannot determine a backup pool"
             )
             sys.exit(1)
@@ -247,6 +266,14 @@ class TuningManager:
             logging.error("Failed to get a valid backup pool")
             sys.exit(1)
         return backup_pools[0]
+
+    def _parse_primary_stratum_config(self) -> Dict[str, Any]:
+        """Parse only the primary stratum URL from config."""
+        try:
+            return parse_stratum_url(self.config["PRIMARY_STRATUM"])
+        except ValueError as e:
+            logging.error(f"Invalid stratum URL in config: {e}")
+            sys.exit(1)
 
     def _parse_config_stratums(self) -> List[Dict[str, Any]]:
         """Parse stratum URLs from config."""

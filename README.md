@@ -96,9 +96,12 @@ options:
   --serve-metrics       Serve metrics via HTTP on port 8093 (default: False)
   --disable-fastest-pools
                         Disable pool latency measurement via get_fastest_pools()
-                        (default: False). Requires PRIMARY_STRATUM/BACKUP_STRATUM
-                        to be set (via config or --primary-stratum/--backup-stratum),
-                        or the tuner exits at startup.
+                        (default: False). Requires PRIMARY_STRATUM to be set (via
+                        config or --primary-stratum); if no backup pool is given
+                        (BACKUP_STRATUM / --backup-stratum), the primary pool is
+                        reused as the backup so the tuner keeps running with a
+                        single pool. Exits at startup only if no primary pool is
+                        available at all.
 
 ### Configuration Notes
 The script loads default settings from an ASIC model-specific YAML file (e.g., BM1366.yaml).
