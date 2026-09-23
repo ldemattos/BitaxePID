@@ -64,7 +64,7 @@ usage: bitaxepid.py [-h] [--version] --ip IP [--config CONFIG] [--user-file USER
                     [--primary-stratum PRIMARY_STRATUM] [--backup-stratum BACKUP_STRATUM] [--stratum-user STRATUM_USER]
                     [--fallback-stratum-user FALLBACK_STRATUM_USER] [--voltage VOLTAGE] [--frequency FREQUENCY]
                     [--sample-interval SAMPLE_INTERVAL] [--log-to-console] [--logging-level {info,debug}] [--serve-metrics]
-                    [--disable-fastest-pools]
+                    [--disable-fastest-pools] [--control-strategy {pid,tcontrol}]
 
 BitaxePID Auto-Tuner
 
@@ -102,6 +102,38 @@ options:
                         reused as the backup so the tuner keeps running with a
                         single pool. Exits at startup only if no primary pool is
                         available at all.
+  --control-strategy {pid,tcontrol}
+                        Tuning strategy to use (default: from CONTROL_STRATEGY
+                        in config, else 'pid'). 'pid' is the existing
+                        hashrate-driven PIDTuningStrategy; 'tcontrol' holds a
+                        target temperature by adjusting voltage only, leaving
+                        frequency unchanged (see tcontrol.py).
+
+### Temperature-only control (tcontrol)
+
+`tcontrol.py` implements an alternative tuning strategy, `tcontrol`, that
+holds `TARGET_TEMP` by adjusting core voltage alone (frequency is left
+untouched), as opposed to the default `pid` strategy, which drives both
+voltage and frequency toward `HASHRATE_SETPOINT`. Select it with
+`--control-strategy tcontrol` (or `CONTROL_STRATEGY=tcontrol` in Docker).
+
+Each control cycle:
+
+1. `error = TARGET_TEMP - measured_temp`, clamped to
+   `+-TCONTROL_MAX_DELTA_T` degrees.
+2. That clamped error is fed through a PID compensator (gains
+   `TCONTROL_KP`/`TCONTROL_KI`/`TCONTROL_KD`), built and discretized with
+   the [`control`](https://python-control.readthedocs.io/) package, to
+   produce a `deltaT` output.
+3. The next voltage setpoint is `current_voltage * (1 + deltaT / TARGET_TEMP)`,
+   clamped to `[MIN_VOLTAGE, MAX_VOLTAGE]`.
+
+The measured temperature, the PID output (`deltaT`) and the new voltage
+setpoint are logged on every iteration. New config keys (with defaults if
+unset): `TCONTROL_KP` (0.05), `TCONTROL_KI` (0.01), `TCONTROL_KD` (0.01),
+`TCONTROL_MAX_DELTA_T` (5.0 degC) — settable via `--config`, or in Docker
+via env vars of the same name. Requires the `control` and `numpy` packages
+(see requirements.txt).
 
 ### Configuration Notes
 The script loads default settings from an ASIC model-specific YAML file (e.g., BM1366.yaml).

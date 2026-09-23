@@ -41,6 +41,7 @@ from implementations import (
     PIDTuningStrategy,
 )
 from pools import get_fastest_pools
+from tcontrol import tcontrol
 from rich.console import Console
 import json
 import os
@@ -524,6 +525,18 @@ def parse_arguments() -> argparse.Namespace:
             "--primary-stratum/--backup-stratum), or the tuner will exit at startup."
         ),
     )
+    parser.add_argument(
+        "--control-strategy",
+        type=str,
+        choices=["pid", "tcontrol"],
+        default=None,
+        help=(
+            "Tuning strategy to use (default: from CONTROL_STRATEGY in config, "
+            "else 'pid'). 'pid' is the existing hashrate-driven PIDTuningStrategy; "
+            "'tcontrol' holds a target temperature by adjusting voltage only, "
+            "leaving frequency unchanged (see tcontrol.py)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -636,30 +649,58 @@ def main() -> None:
     serve_metrics = args.serve_metrics or config.get("METRICS_SERVE", False)
     config["METRICS_SERVE"] = serve_metrics
 
+    control_strategy = (
+        args.control_strategy or config.get("CONTROL_STRATEGY") or "pid"
+    ).lower()
+    config["CONTROL_STRATEGY"] = control_strategy
+    # tcontrol-specific gains: default here (rather than in validate_config's
+    # required_keys) so existing ASIC model YAMLs need no changes to keep
+    # working with the 'pid' strategy; only used when control_strategy is
+    # 'tcontrol'. Override via TCONTROL_KP/KI/KD/MAX_DELTA_T (config file,
+    # --config, or the matching Docker env vars).
+    config.setdefault("TCONTROL_KP", 0.05)
+    config.setdefault("TCONTROL_KI", 0.01)
+    config.setdefault("TCONTROL_KD", 0.01)
+    config.setdefault("TCONTROL_MAX_DELTA_T", 5.0)
+
     logging.debug(f"ASIC model detected: {asic_model} (loaded from {asic_yaml})")
     logging.debug("Effective configuration (ASIC model YAML + --config + CLI overrides):")
     for key, value in sorted(config.items()):
         logging.debug(f"  {key} = {value}")
 
     logger_instance = Logger(config["LOG_FILE"], config["SNAPSHOT_FILE"])
-    tuning_strategy = PIDTuningStrategy(
-        kp_freq=config["PID_FREQ_KP"],
-        ki_freq=config["PID_FREQ_KI"],
-        kd_freq=config["PID_FREQ_KD"],
-        kp_volt=config["PID_VOLT_KP"],
-        ki_volt=config["PID_VOLT_KI"],
-        kd_volt=config["PID_VOLT_KD"],
-        min_voltage=config["MIN_VOLTAGE"],
-        max_voltage=config["MAX_VOLTAGE"],
-        min_frequency=config["MIN_FREQUENCY"],
-        max_frequency=config["MAX_FREQUENCY"],
-        voltage_step=config["VOLTAGE_STEP"],
-        frequency_step=config["FREQUENCY_STEP"],
-        setpoint=config["HASHRATE_SETPOINT"],
-        sample_interval=config["SAMPLE_INTERVAL"],
-        target_temp=config["TARGET_TEMP"],
-        power_limit=config["POWER_LIMIT"],
-    )
+    if control_strategy == "tcontrol":
+        logging.info("Using tcontrol (temperature-only, voltage-adjusting) strategy")
+        tuning_strategy = tcontrol(
+            kp=config["TCONTROL_KP"],
+            ki=config["TCONTROL_KI"],
+            kd=config["TCONTROL_KD"],
+            sample_interval=config["SAMPLE_INTERVAL"],
+            target_temp=config["TARGET_TEMP"],
+            max_delta_t=config["TCONTROL_MAX_DELTA_T"],
+            min_voltage=config["MIN_VOLTAGE"],
+            max_voltage=config["MAX_VOLTAGE"],
+        )
+    else:
+        logging.info("Using pid (hashrate-driven) strategy")
+        tuning_strategy = PIDTuningStrategy(
+            kp_freq=config["PID_FREQ_KP"],
+            ki_freq=config["PID_FREQ_KI"],
+            kd_freq=config["PID_FREQ_KD"],
+            kp_volt=config["PID_VOLT_KP"],
+            ki_volt=config["PID_VOLT_KI"],
+            kd_volt=config["PID_VOLT_KD"],
+            min_voltage=config["MIN_VOLTAGE"],
+            max_voltage=config["MAX_VOLTAGE"],
+            min_frequency=config["MIN_FREQUENCY"],
+            max_frequency=config["MAX_FREQUENCY"],
+            voltage_step=config["VOLTAGE_STEP"],
+            frequency_step=config["FREQUENCY_STEP"],
+            setpoint=config["HASHRATE_SETPOINT"],
+            sample_interval=config["SAMPLE_INTERVAL"],
+            target_temp=config["TARGET_TEMP"],
+            power_limit=config["POWER_LIMIT"],
+        )
     terminal_ui = NullTerminalUI() if args.log_to_console else RichTerminalUI()
 
     primary_stratum = (
@@ -675,6 +716,7 @@ def main() -> None:
 
     logging.debug("Resolved startup settings:")
     logging.debug(f"  asic_model = {asic_model}")
+    logging.debug(f"  control_strategy = {control_strategy}")
     logging.debug(f"  serve_metrics = {serve_metrics}")
     logging.debug(f"  disable_fastest_pools = {args.disable_fastest_pools}")
     logging.debug(f"  primary_stratum (from --primary-stratum) = {primary_stratum}")
