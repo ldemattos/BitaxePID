@@ -157,6 +157,14 @@ class tcontrol(TuningStrategy):
 
         self._sys = _build_discrete_pid(kp, ki, kd, sample_interval)
         self._state = np.zeros((self._sys.nstates, 1))
+        # Bumpless start: the very first apply_strategy() call must report a
+        # zero PID output, whatever the measured error is at startup, so
+        # tcontrol never opens with an abrupt voltage jump before the loop
+        # has taken even one sample. The state is still stepped normally
+        # with the real error on that first call -- only delta_t (and
+        # therefore factor/new_voltage) is suppressed to 0.0/1.0/unchanged
+        # for that one call; every call after it uses the PID's real output.
+        self._first_call = True
 
     def apply_strategy(
         self,
@@ -199,7 +207,17 @@ class tcontrol(TuningStrategy):
         u = np.array([[error_band]])
         y = self._sys.C @ self._state + self._sys.D @ u
         self._state = self._sys.A @ self._state + self._sys.B @ u
-        delta_t = float(y[0, 0])
+
+        if self._first_call:
+            # Bumpless start: report zero PID output on this first call only,
+            # regardless of what the compensator just computed above (the
+            # state update above still uses the real error_band, so the
+            # controller's memory is correctly seeded for every call after
+            # this one).
+            delta_t = 0.0
+            self._first_call = False
+        else:
+            delta_t = float(y[0, 0])
 
         factor = 1 + delta_t / self.target_temp
         new_voltage_raw = current_voltage * factor
