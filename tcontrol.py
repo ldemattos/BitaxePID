@@ -24,15 +24,21 @@ Concretely, each call to `apply_strategy`:
     1. error         = target_temp - measured_temp
     2. error_band     = 0 if -max_delta_t <= error <= +max_delta_t else error
                          # a deadband, not a clamp: inside +-max_delta_t the
-                         # PID sees no error at all, so P/I/D contribute
-                         # nothing and voltage is left unchanged; outside the
-                         # band the *actual* error passes through unaltered
-                         # (not shifted or capped).
+                         # PID is fed zero error every step (not skipped),
+                         # so its internal state keeps evolving continuously
+                         # instead of freezing; outside the band the
+                         # *actual* error passes through unaltered (not
+                         # shifted or capped).
     3. delta_t        = PID(error_band)   # Kp, Ki, Kd, via a discretized
                                            # transfer function built with
-                                           # the `control` package
-    4. factor         = 1 + delta_t / target_temp
-    5. new_voltage    = clip(current_voltage * factor, min_voltage, max_voltage)
+                                           # the `control` package, stepped
+                                           # every call regardless of band
+    4. factor         = 1.0 if in deadband else 1 + delta_t / target_temp
+                         # inside the deadband the PID's output is computed
+                         # (to avoid a discontinuity) but discarded: voltage
+                         # is forced to stay exactly at current_voltage
+    5. new_voltage    = current_voltage                          if in deadband
+                         clip(current_voltage * factor, min_voltage, max_voltage)  otherwise
 
 `current_voltage` (the previous iteration's voltage setpoint, tracked by
 TuningManager and passed into `apply_strategy` on every call) plays the role
@@ -126,9 +132,12 @@ class tcontrol(TuningStrategy):
             max_delta_t (float): Symmetric deadband applied to the temperature
                 error before the PID terms, "+-deltaT" in the block diagram
                 (TCONTROL_MAX_DELTA_T, deg C). While the error stays within
-                +-max_delta_t, the PID sees zero error and the voltage
-                setpoint is left unchanged; outside that band, the actual
-                (unclamped) error is passed to the PID.
+                +-max_delta_t, the PID is fed zero error (stepped, not
+                skipped, so its state evolves continuously with no
+                discontinuity) and its output is discarded: the voltage
+                setpoint is left unchanged. Outside that band, the actual
+                (unclamped) error is passed to the PID and its output does
+                set the new voltage.
             min_voltage (float): Minimum allowed voltage (mV), "Vmin".
             max_voltage (float): Maximum allowed voltage (mV), "Vmax".
         """
@@ -184,16 +193,25 @@ class tcontrol(TuningStrategy):
         in_deadband = -self.max_delta_t <= error <= self.max_delta_t
         error_band = 0.0 if in_deadband else error
 
-        if in_deadband:
-            new_voltage = current_voltage
-            delta_t = 0.0
-            factor = 1.0
-        else:
-            u = np.array([[error_band]])
-            y = self._sys.C @ self._state + self._sys.D @ u
-            self._state = self._sys.A @ self._state + self._sys.B @ u
-            delta_t = float(y[0, 0])
+        # Always step the PID's internal state, even inside the deadband,
+        # feeding it zero error rather than skipping the step. This keeps
+        # the compensator's state evolving continuously (e.g. any settling
+        # of the derivative filter, and a de facto integrator "hold" since
+        # a zero-error step contributes no fresh area) instead of freezing
+        # it, avoiding a discontinuity in delta_t/voltage the moment the
+        # error re-enters or leaves the band. The deadband's effect on the
+        # *output* is enforced separately below: while in_deadband, the
+        # voltage setpoint is still left completely unchanged regardless of
+        # what the PID computes.
+        u = np.array([[error_band]])
+        y = self._sys.C @ self._state + self._sys.D @ u
+        self._state = self._sys.A @ self._state + self._sys.B @ u
+        delta_t = float(y[0, 0])
 
+        if in_deadband:
+            factor = 1.0
+            new_voltage = current_voltage
+        else:
             factor = 1 + delta_t / self.target_temp
             new_voltage_raw = current_voltage * factor
             new_voltage = max(self.min_voltage, min(self.max_voltage, new_voltage_raw))

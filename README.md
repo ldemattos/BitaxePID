@@ -121,10 +121,11 @@ Each control cycle:
 
 1. `error = TARGET_TEMP - measured_temp`.
 2. A deadband, not a clamp: while `error` stays within
-   `+-TCONTROL_MAX_DELTA_T` degrees, the PID sees zero error, so it
-   contributes nothing and the voltage setpoint is left completely
-   unchanged. Outside that band, the actual (unclamped) error is fed
-   through a PID compensator (gains `TCONTROL_KP`/`TCONTROL_KI`/
+   `+-TCONTROL_MAX_DELTA_T` degrees, the PID is still stepped every cycle
+   but fed zero error (so its internal state evolves continuously with no
+   discontinuity), and its output is discarded: the voltage setpoint is
+   left completely unchanged. Outside that band, the actual (unclamped)
+   error is fed through the same PID compensator (gains `TCONTROL_KP`/`TCONTROL_KI`/
    `TCONTROL_KD`), built and discretized with the
    [`control`](https://python-control.readthedocs.io/) package, to
    produce a `deltaT` output.
