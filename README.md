@@ -119,14 +119,18 @@ voltage and frequency toward `HASHRATE_SETPOINT`. Select it with
 
 Each control cycle:
 
-1. `error = TARGET_TEMP - measured_temp`, clamped to
-   `+-TCONTROL_MAX_DELTA_T` degrees.
-2. That clamped error is fed through a PID compensator (gains
-   `TCONTROL_KP`/`TCONTROL_KI`/`TCONTROL_KD`), built and discretized with
-   the [`control`](https://python-control.readthedocs.io/) package, to
+1. `error = TARGET_TEMP - measured_temp`.
+2. A deadband, not a clamp: while `error` stays within
+   `+-TCONTROL_MAX_DELTA_T` degrees, the PID sees zero error, so it
+   contributes nothing and the voltage setpoint is left completely
+   unchanged. Outside that band, the actual (unclamped) error is fed
+   through a PID compensator (gains `TCONTROL_KP`/`TCONTROL_KI`/
+   `TCONTROL_KD`), built and discretized with the
+   [`control`](https://python-control.readthedocs.io/) package, to
    produce a `deltaT` output.
-3. The next voltage setpoint is `current_voltage * (1 + deltaT / TARGET_TEMP)`,
-   clamped to `[MIN_VOLTAGE, MAX_VOLTAGE]`.
+3. When outside the deadband, the next voltage setpoint is
+   `current_voltage * (1 + deltaT / TARGET_TEMP)`, clamped to
+   `[MIN_VOLTAGE, MAX_VOLTAGE]`.
 
 The measured temperature, the PID output (`deltaT`) and the new voltage
 setpoint are logged on every iteration. New config keys (with defaults if

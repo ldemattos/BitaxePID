@@ -9,7 +9,7 @@ left untouched; only voltage is adjusted.
 
 Block diagram (see specs/tcontrol.docx):
 
-    T setpoint --(+)--> [sum] --> [clamp -deltaT..+deltaT] --> Kp,Ki,Kd (P/I/D) --(+)--> deltaT
+    T setpoint --(+)--> [sum] --> [deadband -deltaT..+deltaT] --> Kp,Ki,Kd (P/I/D) --(+)--> deltaT
                           ^ (-)                                                     |
                           |                                                         v
                      T measured                                    deltaT --(x)--> [combine] <--(1/x)-- T setpoint
@@ -21,11 +21,16 @@ Block diagram (see specs/tcontrol.docx):
                                                                       V_setpoint (next iteration) <-------+
 
 Concretely, each call to `apply_strategy`:
-    1. error          = target_temp - measured_temp
-    2. error_clamped  = clip(error, -max_delta_t, +max_delta_t)
-    3. delta_t        = PID(error_clamped)   # Kp, Ki, Kd, via a discretized
-                                              # transfer function built with
-                                              # the `control` package
+    1. error         = target_temp - measured_temp
+    2. error_band     = 0 if -max_delta_t <= error <= +max_delta_t else error
+                         # a deadband, not a clamp: inside +-max_delta_t the
+                         # PID sees no error at all, so P/I/D contribute
+                         # nothing and voltage is left unchanged; outside the
+                         # band the *actual* error passes through unaltered
+                         # (not shifted or capped).
+    3. delta_t        = PID(error_band)   # Kp, Ki, Kd, via a discretized
+                                           # transfer function built with
+                                           # the `control` package
     4. factor         = 1 + delta_t / target_temp
     5. new_voltage    = clip(current_voltage * factor, min_voltage, max_voltage)
 
@@ -118,9 +123,12 @@ class tcontrol(TuningStrategy):
             kd (float): Derivative gain (TCONTROL_KD).
             sample_interval (float): Control loop sample time (seconds).
             target_temp (float): Target die temperature, "T setpoint" (deg C).
-            max_delta_t (float): Symmetric clamp applied to the temperature
+            max_delta_t (float): Symmetric deadband applied to the temperature
                 error before the PID terms, "+-deltaT" in the block diagram
-                (TCONTROL_MAX_DELTA_T, deg C).
+                (TCONTROL_MAX_DELTA_T, deg C). While the error stays within
+                +-max_delta_t, the PID sees zero error and the voltage
+                setpoint is left unchanged; outside that band, the actual
+                (unclamped) error is passed to the PID.
             min_voltage (float): Minimum allowed voltage (mV), "Vmin".
             max_voltage (float): Maximum allowed voltage (mV), "Vmax".
         """
@@ -169,25 +177,35 @@ class tcontrol(TuningStrategy):
             Tuple[float, float]: (new_voltage, current_frequency).
         """
         error = self.target_temp - temp
-        error_clamped = max(-self.max_delta_t, min(self.max_delta_t, error))
+        # Deadband (not a clamp): inside +-max_delta_t, the PID sees zero
+        # error, so P/I/D contribute nothing this step and the voltage
+        # setpoint is left unmodified. Outside the band, the actual error
+        # passes through unaltered (not shifted or capped).
+        in_deadband = -self.max_delta_t <= error <= self.max_delta_t
+        error_band = 0.0 if in_deadband else error
 
-        u = np.array([[error_clamped]])
-        y = self._sys.C @ self._state + self._sys.D @ u
-        self._state = self._sys.A @ self._state + self._sys.B @ u
-        delta_t = float(y[0, 0])
+        if in_deadband:
+            new_voltage = current_voltage
+            delta_t = 0.0
+            factor = 1.0
+        else:
+            u = np.array([[error_band]])
+            y = self._sys.C @ self._state + self._sys.D @ u
+            self._state = self._sys.A @ self._state + self._sys.B @ u
+            delta_t = float(y[0, 0])
 
-        factor = 1 + delta_t / self.target_temp
-        new_voltage_raw = current_voltage * factor
-        new_voltage = max(self.min_voltage, min(self.max_voltage, new_voltage_raw))
+            factor = 1 + delta_t / self.target_temp
+            new_voltage_raw = current_voltage * factor
+            new_voltage = max(self.min_voltage, min(self.max_voltage, new_voltage_raw))
 
         logging.info(
             f"tcontrol: measured_temp={temp}C target_temp={self.target_temp}C "
-            f"error={error:.3f} error_clamped={error_clamped:.3f} "
+            f"error={error:.3f} error_band={error_band:.3f} in_deadband={in_deadband} "
             f"PID_output(deltaT)={delta_t:.4f} voltage_setpoint={new_voltage:.2f}mV"
         )
         logging.debug(
             f"tcontrol: current_voltage={current_voltage} factor={factor:.6f} "
-            f"new_voltage_raw={new_voltage_raw:.2f} clamped=[{self.min_voltage},{self.max_voltage}] "
+            f"bounds=[{self.min_voltage},{self.max_voltage}] "
             f"frequency (unchanged)={current_frequency}MHz"
         )
 
