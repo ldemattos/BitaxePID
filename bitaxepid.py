@@ -656,12 +656,15 @@ def main() -> None:
     # tcontrol-specific gains: default here (rather than in validate_config's
     # required_keys) so existing ASIC model YAMLs need no changes to keep
     # working with the 'pid' strategy; only used when control_strategy is
-    # 'tcontrol'. Override via TCONTROL_KP/KI/KD/MAX_DELTA_T (config file,
-    # --config, or the matching Docker env vars).
+    # 'tcontrol'. Override via TCONTROL_KP/KI/KD/MAX_DELTA_V (config file,
+    # --config, or the matching Docker env vars). TCONTROL_MAX_DELTA_V is a
+    # unitless fraction of target_temp (e.g. 0.05 = 5%), applied as a
+    # deadband on the PID's output ratio, not on the input error -- see
+    # tcontrol.py's module docstring for the revised block diagram.
     config.setdefault("TCONTROL_KP", 0.05)
     config.setdefault("TCONTROL_KI", 0.01)
     config.setdefault("TCONTROL_KD", 0.01)
-    config.setdefault("TCONTROL_MAX_DELTA_T", 5.0)
+    config.setdefault("TCONTROL_MAX_DELTA_V", 0.05)
 
     logging.debug(f"ASIC model detected: {asic_model} (loaded from {asic_yaml})")
     logging.debug("Effective configuration (ASIC model YAML + --config + CLI overrides):")
@@ -677,7 +680,7 @@ def main() -> None:
             kd=config["TCONTROL_KD"],
             sample_interval=config["SAMPLE_INTERVAL"],
             target_temp=config["TARGET_TEMP"],
-            max_delta_t=config["TCONTROL_MAX_DELTA_T"],
+            max_delta_v=config["TCONTROL_MAX_DELTA_V"],
             min_voltage=config["MIN_VOLTAGE"],
             max_voltage=config["MAX_VOLTAGE"],
         )

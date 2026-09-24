@@ -7,36 +7,53 @@ miner's core voltage to hold a target die temperature, as an alternative to
 the hashrate-driven `PIDTuningStrategy` in implementations.py. Frequency is
 left untouched; only voltage is adjusted.
 
-Block diagram (see specs/tcontrol.docx):
+Block diagram (see specs/tcontrol.docx, revised):
 
-    T setpoint --(+)--> [sum] --> [deadband -deltaT..+deltaT] --> Kp,Ki,Kd (P/I/D) --(+)--> deltaT
-                          ^ (-)                                                     |
-                          |                                                         v
-                     T measured                                    deltaT --(x)--> [combine] <--(1/x)-- T setpoint
-                                                                                         |
-                                                                         factor = 1 + deltaT/T_setpoint
-                                                                                         |
+    T setpoint --(+)--> [sum] --> Kp,Ki,Kd (P/I/D) --(+)--> deltaT
+                          ^ (-)                                |
+                          |                                    v
+                     T measured                     deltaT --(x)--> [ratio] <--(1/x)-- T setpoint
+                                                                  |
+                                                          r = deltaT / T_setpoint
+                                                                  |
+                                                       [deadband -deltaV..+deltaV]
+                                                                  |
+                                                          r_band  (0 inside the band,
+                                                                   r unaltered outside it)
+                                                                  |
+                                                            +1  -->  factor = 1 + r_band
+                                                                  |
                                                     V_new = clamp(V_setpoint * factor, Vmin, Vmax)
                                                                                          |
                                                                       V_setpoint (next iteration) <-------+
 
+The deadband moved: it no longer gates the temperature error going into the
+PID (the PID always runs on the full, real error, every call -- its output
+is never bypassed or discarded). Instead it now gates the PID's *output*,
+after that output has been turned into a fraction of target_temp: only a
+fractional voltage adjustment (r = deltaT/target_temp) smaller in magnitude
+than +-max_delta_v is zeroed out; a larger one passes through unaltered.
+
 Concretely, each call to `apply_strategy`:
-    1. error         = target_temp - measured_temp
-    2. error_band     = 0 if -max_delta_t <= error <= +max_delta_t else error
-                         # a deadband, not a clamp: inside +-max_delta_t the
-                         # PID is fed zero error; outside the band the
-                         # *actual* error passes through unaltered (not
-                         # shifted or capped). Either way the PID is stepped
-                         # the same way every call -- the deadband only
-                         # changes what is fed in as u, never what happens
-                         # to the output afterward.
-    3. delta_t        = PID(error_band)   # Kp, Ki, Kd, via a discretized
-                                           # transfer function built with
-                                           # the `control` package, stepped
-                                           # every call with whatever
-                                           # error_band produced
-    4. factor         = 1 + delta_t / target_temp
-    5. new_voltage    = clip(current_voltage * factor, min_voltage, max_voltage)
+    1. error       = target_temp - measured_temp   # always the real error,
+                                                     # never deadbanded
+    2. delta_t     = PID(error)   # Kp, Ki, Kd, via a discretized transfer
+                                   # function built with the `control`
+                                   # package, stepped every call with the
+                                   # real error (never skipped, never fed a
+                                   # substitute value except see note below
+                                   # on the very first call)
+    3. r           = delta_t / target_temp
+    4. r_band      = 0.0 if -max_delta_v <= r <= +max_delta_v else r
+                     # a deadband, not a clamp, now applied to the PID's
+                     # *output* ratio rather than to the error feeding it
+    5. factor      = 1 + r_band
+    6. new_voltage = clip(current_voltage * factor, min_voltage, max_voltage)
+
+Bumpless start: on the very first call to `apply_strategy` (regardless of
+the deadband), `delta_t` is forced to 0.0 so the loop never opens with an
+abrupt voltage jump before it has run for even one sample; every call after
+that uses the PID's real output.
 
 `current_voltage` (the previous iteration's voltage setpoint, tracked by
 TuningManager and passed into `apply_strategy` on every call) plays the role
@@ -114,7 +131,7 @@ class tcontrol(TuningStrategy):
         kd: float,
         sample_interval: float,
         target_temp: float,
-        max_delta_t: float,
+        max_delta_v: float,
         min_voltage: float,
         max_voltage: float,
     ) -> None:
@@ -127,23 +144,24 @@ class tcontrol(TuningStrategy):
             kd (float): Derivative gain (TCONTROL_KD).
             sample_interval (float): Control loop sample time (seconds).
             target_temp (float): Target die temperature, "T setpoint" (deg C).
-            max_delta_t (float): Symmetric deadband applied to the temperature
-                error before the PID terms, "+-deltaT" in the block diagram
-                (TCONTROL_MAX_DELTA_T, deg C). While the error stays within
-                +-max_delta_t, the PID is fed zero error instead of the
-                measured error (stepped exactly like any other call, just
-                with u=0); outside that band, the actual (unclamped) error
-                is fed in. In both cases the PID's output goes on to set
-                factor/new_voltage the same way -- the deadband is never
-                overridden or discarded afterward, so there is no
-                discontinuity at the band edges.
+            max_delta_v (float): Symmetric deadband applied to the PID's
+                *output*, expressed as a fraction of target_temp, "+-deltaV"
+                in the block diagram (TCONTROL_MAX_DELTA_V, unitless
+                fraction, e.g. 0.05 for 5%). The PID always runs on the
+                real, full temperature error every call -- it is never
+                gated or fed a substitute input. Only afterward, once its
+                output delta_t has been turned into a fraction of
+                target_temp (r = delta_t / target_temp), is the deadband
+                applied: while r stays within +-max_delta_v, the resulting
+                voltage adjustment is zeroed (factor stays at 1.0); outside
+                that band, r passes through unaltered.
             min_voltage (float): Minimum allowed voltage (mV), "Vmin".
             max_voltage (float): Maximum allowed voltage (mV), "Vmax".
         """
         logging.debug(
             "tcontrol input variables: "
             f"kp={kp} ki={ki} kd={kd} sample_interval={sample_interval} "
-            f"target_temp={target_temp} max_delta_t={max_delta_t} "
+            f"target_temp={target_temp} max_delta_v={max_delta_v} "
             f"min_voltage={min_voltage} max_voltage={max_voltage}"
         )
         self.kp = kp
@@ -151,7 +169,7 @@ class tcontrol(TuningStrategy):
         self.kd = kd
         self.sample_interval = sample_interval
         self.target_temp = target_temp
-        self.max_delta_t = max_delta_t
+        self.max_delta_v = max_delta_v
         self.min_voltage = min_voltage
         self.max_voltage = max_voltage
 
@@ -193,25 +211,18 @@ class tcontrol(TuningStrategy):
             Tuple[float, float]: (new_voltage, current_frequency).
         """
         error = self.target_temp - temp
-        # Deadband (not a clamp): inside +-max_delta_t, the PID is fed zero
-        # error -- not skipped, not overridden afterward. It is stepped
-        # every call exactly like the out-of-band case, just with u=0
-        # instead of u=error, so its state evolves continuously and delta_t
-        # (and therefore factor/new_voltage) is whatever the PID naturally
-        # computes for that input. There is no separate branch that forces
-        # factor=1.0 or pins new_voltage to current_voltage: the deadband's
-        # only effect is on what is fed into the PID, never on its output.
-        in_deadband = -self.max_delta_t <= error <= self.max_delta_t
-        error_band = 0.0 if in_deadband else error
 
-        u = np.array([[error_band]])
+        # The PID always runs on the real, full error -- every call, no
+        # exceptions, no substitute input. Its output is never gated,
+        # skipped, or discarded.
+        u = np.array([[error]])
         y = self._sys.C @ self._state + self._sys.D @ u
         self._state = self._sys.A @ self._state + self._sys.B @ u
 
         if self._first_call:
-            # Bumpless start: report zero PID output on this first call only,
-            # regardless of what the compensator just computed above (the
-            # state update above still uses the real error_band, so the
+            # Bumpless start: report zero PID output on this first call
+            # only, regardless of what the compensator just computed above
+            # (the state update above still used the real error, so the
             # controller's memory is correctly seeded for every call after
             # this one).
             delta_t = 0.0
@@ -219,14 +230,24 @@ class tcontrol(TuningStrategy):
         else:
             delta_t = float(y[0, 0])
 
-        factor = 1 + delta_t / self.target_temp
+        # Deadband (not a clamp), now applied to the PID's *output* rather
+        # than to the error feeding it: r is the PID's output expressed as
+        # a fraction of target_temp. While |r| stays within max_delta_v,
+        # the voltage adjustment is zeroed (factor stays at 1.0); outside
+        # that band, r passes through unaltered (not shifted or capped).
+        r = delta_t / self.target_temp
+        in_deadband = -self.max_delta_v <= r <= self.max_delta_v
+        r_band = 0.0 if in_deadband else r
+
+        factor = 1 + r_band
         new_voltage_raw = current_voltage * factor
         new_voltage = max(self.min_voltage, min(self.max_voltage, new_voltage_raw))
 
         logging.info(
             f"tcontrol: measured_temp={temp}C target_temp={self.target_temp}C "
-            f"error={error:.3f} error_band={error_band:.3f} in_deadband={in_deadband} "
-            f"PID_output(deltaT)={delta_t:.4f} voltage_setpoint={new_voltage:.2f}mV"
+            f"error={error:.3f} PID_output(deltaT)={delta_t:.4f} "
+            f"ratio(r=deltaT/target_temp)={r:.5f} in_deadband={in_deadband} "
+            f"ratio_band={r_band:.5f} voltage_setpoint={new_voltage:.2f}mV"
         )
         logging.debug(
             f"tcontrol: current_voltage={current_voltage} factor={factor:.6f} "

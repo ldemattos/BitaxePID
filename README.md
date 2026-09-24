@@ -119,26 +119,34 @@ voltage and frequency toward `HASHRATE_SETPOINT`. Select it with
 
 Each control cycle:
 
-1. `error = TARGET_TEMP - measured_temp`.
-2. A deadband, not a clamp: while `error` stays within
-   `+-TCONTROL_MAX_DELTA_T` degrees, the PID is still stepped every cycle
-   but fed zero error (so its internal state evolves continuously with no
-   discontinuity), and its output is discarded: the voltage setpoint is
-   left completely unchanged. Outside that band, the actual (unclamped)
-   error is fed through the same PID compensator (gains `TCONTROL_KP`/`TCONTROL_KI`/
-   `TCONTROL_KD`), built and discretized with the
-   [`control`](https://python-control.readthedocs.io/) package, to
-   produce a `deltaT` output.
-3. When outside the deadband, the next voltage setpoint is
-   `current_voltage * (1 + deltaT / TARGET_TEMP)`, clamped to
-   `[MIN_VOLTAGE, MAX_VOLTAGE]`.
+1. `error = TARGET_TEMP - measured_temp`. The PID always runs on this real,
+   full error, every cycle — it is never gated, skipped, or fed a
+   substitute value (except on the very first call, see below).
+2. The error is fed through a PID compensator (gains `TCONTROL_KP`/
+   `TCONTROL_KI`/`TCONTROL_KD`), built and discretized with the
+   [`control`](https://python-control.readthedocs.io/) package, to produce
+   a `deltaT` output.
+3. `r = deltaT / TARGET_TEMP` — the PID's output expressed as a fraction
+   of `TARGET_TEMP`.
+4. A deadband, not a clamp, now applied to this output ratio rather than
+   to the input error: while `r` stays within `+-TCONTROL_MAX_DELTA_V`
+   (a unitless fraction, not degrees), the voltage adjustment is zeroed
+   (the setpoint is left completely unchanged); outside that band, `r`
+   passes through unaltered.
+5. The next voltage setpoint is `current_voltage * (1 + r_band)`, clamped
+   to `[MIN_VOLTAGE, MAX_VOLTAGE]`.
 
-The measured temperature, the PID output (`deltaT`) and the new voltage
-setpoint are logged on every iteration. New config keys (with defaults if
-unset): `TCONTROL_KP` (0.05), `TCONTROL_KI` (0.01), `TCONTROL_KD` (0.01),
-`TCONTROL_MAX_DELTA_T` (5.0 degC) — settable via `--config`, or in Docker
-via env vars of the same name. Requires the `control` and `numpy` packages
-(see requirements.txt).
+Bumpless start: on the very first call, the PID's output is forced to zero
+(so the loop never opens with an abrupt voltage jump); every call after
+that uses the PID's real output.
+
+The measured temperature, the PID output (`deltaT`), the output ratio and
+the new voltage setpoint are logged on every iteration. New config keys
+(with defaults if unset): `TCONTROL_KP` (0.05), `TCONTROL_KI` (0.01),
+`TCONTROL_KD` (0.01), `TCONTROL_MAX_DELTA_V` (0.05, i.e. 5% of
+`TARGET_TEMP`) — settable via `--config`, or in Docker via env vars of the
+same name. Requires the `control` and `numpy` packages (see
+requirements.txt).
 
 ### Configuration Notes
 The script loads default settings from an ASIC model-specific YAML file (e.g., BM1366.yaml).
