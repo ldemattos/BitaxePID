@@ -1,0 +1,52 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to BitaxePID",
+        "description": "BitaxePID must run with --serve-metrics (SERVE_METRICS=true in Docker).",
+        "data": {
+          "host": "Host (IP address of the machine running BitaxePID)",
+          "port": "Metrics port",
+          "scan_interval": "Sampling time",
+          "variables": "Variables to read"
+        },
+        "data_description": {
+          "host": "Where BitaxePID's metrics server runs, e.g. 192.168.1.20. This is the BitaxePID host, which may differ from the miner's own IP.",
+          "port": "8093 by default; in Docker, the METRICS_PORT you mapped.",
+          "scan_interval": "How often to read the metrics, in seconds.",
+          "variables": "Only the ticked values become sensors; unticked ones are not read."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not read BitaxePID metrics from that host and port. Is it running with --serve-metrics, and is the port reachable?",
+      "empty_host": "Enter a host."
+    },
+    "abort": {
+      "already_configured": "This BitaxePID host and port is already added."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "BitaxePID settings",
+        "data": {
+          "host": "Host (IP address of the machine running BitaxePID)",
+          "port": "Metrics port",
+          "scan_interval": "Sampling time",
+          "variables": "Variables to read"
+        },
+        "data_description": {
+          "host": "Where BitaxePID's metrics server runs, e.g. 192.168.1.20. This is the BitaxePID host, which may differ from the miner's own IP.",
+          "port": "8093 by default; in Docker, the METRICS_PORT you mapped.",
+          "scan_interval": "How often to read the metrics, in seconds.",
+          "variables": "Only the ticked values become sensors; unticked ones are not read."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not read BitaxePID metrics from that host and port.",
+      "empty_host": "Enter a host."
+    }
+  }
+}
